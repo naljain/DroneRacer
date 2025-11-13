@@ -102,7 +102,7 @@ class PPO:
         self.transition.rewards = rewards.clone()
         self.transition.dones = dones
 
-        # Bootstrapping on time outs
+        # Bootstrapping on timeouts
         if "time_outs" in infos:
             self.transition.rewards += self.gamma * torch.squeeze(
                 self.transition.values * infos["time_outs"].unsqueeze(1).to(self.device), 1
@@ -148,6 +148,49 @@ class PPO:
         ) in generator:
             # TODO ----- START -----
             # Implement the PPO update step
+            original_batch_size = observations.batch_size[0]
+
+            # Check if we should normalize advantages per mini batch
+            if self.normalize_advantage_per_mini_batch:
+                with torch.no_grad():
+                    advantages_batch = (advantages_batch - advantages_batch.mean()) / (
+                                                   advantages_batch.std() + 1e-8)
+
+
+            # Surrogate loss
+            ratio = torch.exp(self.policy.get_actions_log_prob(sampled_actions) - torch.squeeze(
+                prev_log_probs))
+            surrogate = -torch.squeeze(advantages_batch) * ratio
+            surrogate_clipped = -torch.squeeze(advantages_batch) * torch.clamp(
+                ratio, 1.0 - self.clip_param, 1.0 + self.clip_param
+            )
+            surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()
+
+            # Value function loss
+            value_batch = self.policy.evaluate(observations, masks=episode_masks, hidden_state=hidden_states[1])
+            if self.use_clipped_value_loss:
+                value_clipped = value_targets + (
+                            value_batch - value_targets).clamp(
+                    -self.clip_param, self.clip_param
+                )
+                value_losses = (value_batch - discounted_returns).pow(2)
+                value_losses_clipped = (value_clipped - discounted_returns).pow(2)
+                value_loss = torch.max(value_losses,
+                                       value_losses_clipped).mean()
+            else:
+                value_loss = (discounted_returns - value_batch).pow(2).mean()
+
+            loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy_batch.mean()
+
+            self.optimizer.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(self.policy.parameters(),
+                                     self.max_grad_norm)
+            self.optimizer.step()
+            mean_value_loss += value_loss.item()
+            mean_surrogate_loss += surrogate_loss.item()
+            entropy_batch = self.policy.entropy[:original_batch_size]
+            mean_entropy += entropy_batch.mean().item()
             # TODO ----- END -----
 
         num_updates = self.num_learning_epochs * self.num_mini_batches
