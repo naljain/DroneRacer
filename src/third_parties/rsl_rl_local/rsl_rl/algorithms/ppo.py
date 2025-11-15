@@ -148,18 +148,26 @@ class PPO:
         ) in generator:
             # TODO ----- START -----
             # Implement the PPO update step
-            original_batch_size = observations.batch_size[0]
+            original_batch_size = observations.shape[0]
 
+            # Initialize advantages batch
+            advantages_batch = advantage_estimates
+            
             # Check if we should normalize advantages per mini batch
             if self.normalize_advantage_per_mini_batch:
                 with torch.no_grad():
                     advantages_batch = (advantages_batch - advantages_batch.mean()) / (
                                                    advantages_batch.std() + 1e-8)
 
+            # Compute actions and values
+            # Update distribution with current observations before getting log probs
+            self.actor_critic.update_distribution(observations)
+            actions_log_prob_batch = self.actor_critic.get_actions_log_prob(sampled_actions)
+            value_batch = self.actor_critic.evaluate(critic_observations, masks=episode_masks, hidden_state=hidden_states[1])
+            entropy_batch = self.actor_critic.entropy
 
             # Surrogate loss
-            ratio = torch.exp(self.policy.get_actions_log_prob(sampled_actions) - torch.squeeze(
-                prev_log_probs))
+            ratio = torch.exp(actions_log_prob_batch - torch.squeeze(prev_log_probs))
             surrogate = -torch.squeeze(advantages_batch) * ratio
             surrogate_clipped = -torch.squeeze(advantages_batch) * torch.clamp(
                 ratio, 1.0 - self.clip_param, 1.0 + self.clip_param
@@ -167,7 +175,6 @@ class PPO:
             surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()
 
             # Value function loss
-            value_batch = self.policy.evaluate(observations, masks=episode_masks, hidden_state=hidden_states[1])
             if self.use_clipped_value_loss:
                 value_clipped = value_targets + (
                             value_batch - value_targets).clamp(
@@ -184,12 +191,11 @@ class PPO:
 
             self.optimizer.zero_grad()
             loss.backward()
-            nn.utils.clip_grad_norm_(self.policy.parameters(),
+            nn.utils.clip_grad_norm_(self.actor_critic.parameters(),
                                      self.max_grad_norm)
             self.optimizer.step()
             mean_value_loss += value_loss.item()
             mean_surrogate_loss += surrogate_loss.item()
-            entropy_batch = self.policy.entropy[:original_batch_size]
             mean_entropy += entropy_batch.mean().item()
             # TODO ----- END -----
 
