@@ -233,9 +233,14 @@ class DefaultQuadcopterStrategy:
         theta = self.env._waypoints[waypoint_indices][:, -1]
         z_wp = self.env._waypoints[waypoint_indices][:, 2]
 
-        x_local = -2.0 * torch.ones(n_reset, device=self.device)
-        y_local = torch.zeros(n_reset, device=self.device)
-        z_local = torch.zeros(n_reset, device=self.device)
+        # adding variations in initial positons
+        # x_local = -2.0 * torch.ones(n_reset, device=self.device)
+        # y_local = torch.zeros(n_reset, device=self.device)
+        # z_local = torch.zeros(n_reset, device=self.device)
+
+        x_local = torch.empty(n_reset, device=self.device).uniform_(-3.0, 0.0)
+        y_local = torch.empty(n_reset, device=self.device).uniform_(-1.0, 1.0)
+        z_local = torch.empty(n_reset, device=self.device).uniform_(-0.2, 0.5)
 
         # rotate local pos to global frame
         cos_theta = torch.cos(theta)
@@ -252,11 +257,19 @@ class DefaultQuadcopterStrategy:
 
         # point drone towards the zeroth gate
         initial_yaw = torch.atan2(y0_wp - initial_y, x0_wp - initial_x)
-        quat = quat_from_euler_xyz(
-            torch.zeros(1, device=self.device),
-            torch.zeros(1, device=self.device),
-            initial_yaw + torch.empty(1, device=self.device).uniform_(-0.15, 0.15)
-        )
+        # adding some variation in yaw as noise, so it doesn't point directly at the gate
+        yaw_noise = torch.empty(n_reset, device=self.device).uniform_(-10.0 * D2R, 10.0 * D2R)
+        roll_noise = torch.empty(n_reset, device=self.device).uniform_(-5.0 * D2R, 5.0 * D2R)
+        pitch_noise = torch.empty(n_reset, device=self.device).uniform_(-5.0 * D2R, 5.0 * D2R)
+
+        # quat = quat_from_euler_xyz(
+        #     torch.zeros(1, device=self.device),
+        #     torch.zeros(1, device=self.device),
+        #     initial_yaw + torch.empty(1, device=self.device).uniform_(-0.15, 0.15)
+        # )
+
+        quat = quat_from_euler_xyz(roll_noise, pitch_noise, initial_yaw + initial_yaw)
+
         default_root_state[:, 3:7] = quat
         # TODO ----- END -----
 
