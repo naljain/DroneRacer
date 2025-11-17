@@ -10,6 +10,12 @@
 import sys
 import os
 
+# Add project root to Python path to enable src imports
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+    print(f"[INFO] Added project root to path: {project_root}")
+
 local_rsl_path = os.path.abspath("src/third_parties/rsl_rl_local")
 if os.path.exists(local_rsl_path):
     sys.path.insert(0, local_rsl_path)
@@ -23,7 +29,7 @@ from isaaclab.app import AppLauncher
 import cli_args
 
 # add argparse arguments
-parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
+parser = argparse.ArgumentParser(description="Train an RL agent withc RSL-RL.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
 parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
@@ -107,14 +113,22 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # TODO ----- START ----- Define rewards scales
     # reward scales
-    progress_goal_reward_scale = 50.0
-    crash_reward = -1.0
-    death_cost = -10.0
-
     rewards = {
-        'progress_goal_reward_scale': progress_goal_reward_scale,
-        'crash_reward_scale': crash_reward,
-        'death_cost': death_cost,
+        # --- Primary Objective (Large Positive) ---
+        "pass_gate_reward_scale": 20.0,
+
+        # --- Shaping Rewards (Small/Moderate Positive) ---
+        "progress_to_gate_reward_scale": 1.5,
+        "alignment_reward_scale": 0.1,
+
+        # --- Penalties (Negative) ---
+        "time_reward_scale": -0.01,
+        "crash_reward_scale": -10.0,
+        "ang_vel_reward_scale": -0.001,
+        "action_rate_reward_scale": -0.005,
+        
+        # --- Terminal Penalty (Large Negative) ---
+        "death_cost": -10.0
     }
     # TODO ----- END -----
 
