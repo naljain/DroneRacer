@@ -268,7 +268,7 @@ class DefaultQuadcopterStrategy:
         #     initial_yaw + torch.empty(1, device=self.device).uniform_(-0.15, 0.15)
         # )
 
-        quat = quat_from_euler_xyz(roll_noise, pitch_noise, initial_yaw + initial_yaw)
+        quat = quat_from_euler_xyz(roll_noise, pitch_noise, initial_yaw + yaw_noise)
 
         default_root_state[:, 3:7] = quat
         # TODO ----- END -----
