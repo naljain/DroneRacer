@@ -119,9 +119,16 @@ class DefaultQuadcopterStrategy:
 
         # compute crashed environments if contact detected for 100 timesteps
         contact_forces = self.env._contact_sensor.data.net_forces_w
-        crashed = (torch.norm(contact_forces, dim=-1) > 1e-8).squeeze(1).int()
+        crashed = (torch.norm(contact_forces, dim=-1) > 0.1).squeeze(1).int()
         mask = (self.env.episode_length_buf > 100).int()
         self.env._crashed = self.env._crashed + crashed * mask
+
+        # --- 3. Progress Reward ---
+        # This rewards the drone for *reducing its distance* to the *current* target gate.
+        prev_distance_to_gate = torch.norm(self._prev_drone_pos_w - target_gate_pos_w, dim=1)
+        current_distance_to_gate = torch.norm(drone_pos_w - target_gate_pos_w, dim=1)
+        
+        reward_progress_to_gate = prev_distance_to_gate - current_distance_to_gate
 
         # --- Gate Passing Logic ---
         x_drone_wrt_gate = self.env._pose_drone_wrt_gate[:, 0]
@@ -129,7 +136,7 @@ class DefaultQuadcopterStrategy:
 
         gate_passed = (x_drone_wrt_gate > 0.0) & \
                     (self.env._prev_x_drone_wrt_gate <= 0.0) & \
-                    (alignment_drone_wrt_gate < self.gate_radius)
+                    (alignment_drone_wrt_gate < self._gate_pass_threshold)
         
         ids_gate_passed = torch.where(gate_passed)[0]
         num_gates = self.env._waypoints.shape[0]
@@ -143,20 +150,17 @@ class DefaultQuadcopterStrategy:
             self.env._idx_wp[ids_gate_passed] = (self.env._idx_wp[ids_gate_passed] + 1) % num_gates
             self.env._desired_pos_w[ids_gate_passed, :] = self.env._waypoints[self.env._idx_wp[ids_gate_passed], :3]
 
-            is_lap_complete = (self.env._n_gates_passed[ids_gate_passed] > 0) & \
-                            (self.env._n_gates_passed[ids_gate_passed] % num_gates == 0)
-            lap_ids = ids_gate_passed[is_lap_complete]
-            if len(lap_ids) > 0:
-                lap_complete_reward[lap_ids] = 1.0 # self.env.rew['lap_completion_reward_scale']
+            # Reward for partial completion: percentage of current lap
+            # This promotes sequential gate passing by rewarding progress through laps
+            # After incrementing, this represents the new progress
+            current_lap_progress = (self.env._n_gates_passed[ids_gate_passed]).float() / num_gates
+            lap_complete_reward[ids_gate_passed] = current_lap_progress
 
+            self.env._desired_pos_w[ids_gate_passed, :] = self.env._waypoints[self.env._idx_wp[ids_gate_passed], :3]            
+            target_gate_pos_w = self.env._waypoints[self.env._idx_wp, :3]
 
-        # --- 3. MOD: Progress Reward (from `progress` function) ---
-        # Replaces the raceline-based progress.
-        # This rewards the drone for *reducing its distance* to the *current* target gate.
-        prev_distance_to_gate = torch.norm(self._prev_drone_pos_w - target_gate_pos_w, dim=1)
-        current_distance_to_gate = torch.norm(drone_pos_w - target_gate_pos_w, dim=1)
-        
-        reward_progress_to_gate = prev_distance_to_gate - current_distance_to_gate
+        # Store current X-pos for next step's check
+        self.env._prev_x_drone_wrt_gate = self.env._pose_drone_wrt_gate[:, 0].detach()
 
         # --- 4. Time Penalty (Unchanged) ---
         reward_time = torch.ones(self.num_envs, device=self.device) # 1.0, to be scaled by negative value in config
@@ -173,11 +177,11 @@ class DefaultQuadcopterStrategy:
         # Replaces the simpler cosine similarity reward.
         
         # Get position of next gate (handles wraparound)
-        next_wp_idx = (self.env._idx_wp + 1) % num_gates
-        next_gate_pos_w = self.env._waypoints[next_wp_idx, :3]
+        # next_wp_idx = (self.env._idx_wp + 1) % num_gates
+        # next_gate_pos_w = self.env._waypoints[next_wp_idx, :3]
         
         # Get vector from drone to next gate
-        vec_to_next_gate_w = next_gate_pos_w - drone_pos_w
+        vec_to_next_gate_w = target_gate_pos_w - drone_pos_w
         vec_to_next_gate_w = normalize(vec_to_next_gate_w)
         
         # Get drone's forward-facing vector (X-axis in body frame)
@@ -281,7 +285,7 @@ class DefaultQuadcopterStrategy:
             for key in self._episode_sums.keys():
                 if key in self.env.rew or key in [
                     "progress_to_gate", "pass_gate", "lap_complete", "time", "action_rate", 
-                    "ang_vel", "alignment"
+                    "ang_vel", "alignment", "crash",
                 ]:
                     episodic_sum_avg = torch.mean(self._episode_sums[key][env_ids])
                     extras["Episode_Reward/" + key] = episodic_sum_avg
@@ -420,5 +424,5 @@ class DefaultQuadcopterStrategy:
             self.env._waypoints_quat[self.env._idx_wp[env_ids], :],
             self.env._robot.data.root_link_state_w[env_ids, :3]
         )
-        self.env._prev_x_drone_wrt_gate = torch.ones(self.num_envs, device=self.device)
+        # self.env._prev_x_drone_wrt_gate = torch.ones(self.num_envs, device=self.device)
         self.env._crashed[env_ids] = 0

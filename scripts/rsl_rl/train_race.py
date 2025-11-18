@@ -95,6 +95,22 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     agent_cfg.max_iterations = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
     )
+    
+    # Configure wandb logging
+    # To enable wandb, pass --logger wandb via CLI, or uncomment the line below to set as default
+    # agent_cfg.logger = "wandb"  # Uncomment to enable wandb by default
+    
+    if agent_cfg.logger == "wandb":
+        # Set wandb project name (defaults to "drone_racing" if not specified via CLI)
+        if args_cli.log_project_name is None:
+            if not hasattr(agent_cfg, "wandb_project") or agent_cfg.wandb_project == "isaaclab":
+                agent_cfg.wandb_project = "drone_racing"
+        else:
+            agent_cfg.wandb_project = args_cli.log_project_name
+        print(f"[INFO] Wandb logging enabled. Project: {agent_cfg.wandb_project}")
+        print(f"[INFO] View your runs at: https://wandb.ai")
+    else:
+        print(f"[INFO] Using {agent_cfg.logger} logger. Use --logger wandb to enable wandb logging.")
 
     # set the environment seed
     # note: certain randomizations occur in the environment initialization so we set the seed here
@@ -114,15 +130,28 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # TODO ----- START ----- Define rewards scales
     # reward scales
     rewards = {
-        "pass_gate_reward_scale": 10.0,
-        "progress_to_gate_reward_scale": 10.0,
+        # --- Primary Objective (The Goal) ---
+        "pass_gate_reward_scale": 50.0,
         "lap_complete_reward_scale": 100.0,
+
+        # --- Shaping Rewards (The "Hints") ---
+        # We want the agent to be rewarded for pointing in the right direction
+        # and for physically moving closer.
+        "alignment_reward_scale": 0.5,
+        "progress_to_gate_reward_scale": 0.5,
+
+        # --- Penalties (The "Rules") ---
+        # These should be small. They are just to encourage smooth flight.
         "time_reward_scale": -0.01,
-        "crash_reward_scale": -10.0,
-        "action_rate_reward_scale": -0.005,
-        "ang_vel_reward_scale": -0.001,
-        "alignment_reward_scale": 0.1,
-        "death_cost": -10.0
+        "action_rate_reward_scale": -0.05,
+        "ang_vel_reward_scale": -0.02,      # >> DECREASED from -0.01 (This is the main fix)
+        "crash_reward_scale": -10.0,         # (This is fine)
+
+        # --- Terminal Penalty (The "Failure") ---
+        # This should *exactly* offset your main reward.
+        # If a gate pass is +50, a death should be -50.
+        # This prevents the agent from learning to "crash for points."
+        "death_cost": -50.0,                  # >> CHANGED from -100.0 to match pass_gate
     }
     # TODO ----- END -----
 
