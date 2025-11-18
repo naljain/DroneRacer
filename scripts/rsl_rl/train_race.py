@@ -114,20 +114,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # TODO ----- START ----- Define rewards scales
     # reward scales
     rewards = {
-        # --- Primary Objective (Large Positive) ---
-        "pass_gate_reward_scale": 20.0,
-
-        # --- Shaping Rewards (Small/Moderate Positive) ---
-        "progress_to_gate_reward_scale": 1.5,
-        "alignment_reward_scale": 0.1,
-
-        # --- Penalties (Negative) ---
+        "pass_gate_reward_scale": 10.0,
+        "progress_to_gate_reward_scale": 10.0,
+        "lap_complete_reward_scale": 100.0,
         "time_reward_scale": -0.01,
         "crash_reward_scale": -10.0,
-        "ang_vel_reward_scale": -0.001,
         "action_rate_reward_scale": -0.005,
-        
-        # --- Terminal Penalty (Large Negative) ---
+        "ang_vel_reward_scale": -0.001,
+        "alignment_reward_scale": 0.1,
         "death_cost": -10.0
     }
     # TODO ----- END -----

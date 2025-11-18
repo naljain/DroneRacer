@@ -81,7 +81,7 @@ class DefaultQuadcopterStrategy:
             #         Added 'progress_to_gate'
             new_keys = [
                 "progress_to_gate", "pass_gate", "time", "action_rate", 
-                "ang_vel", "alignment"
+                "ang_vel", "alignment", "lap_complete"
             ]
             for key in new_keys:
                 if key not in self._episode_sums:
@@ -98,10 +98,17 @@ class DefaultQuadcopterStrategy:
         self.env._kd_omega[:, 2] = self.env._kd_omega_y_value
         self.env._tau_m[:] = self.env._tau_m_value
         self.env._thrust_to_weight[:] = self.env._twr_value
+        # Assume a gate radius for passing logic
+        self.gate_radius = 0.5 # m, reasonable guess for inner radius/half-width
 
     def get_rewards(self) -> torch.Tensor:
-        """Computes the full reward function for drone racing."""
+        """get_rewards() is called per timestep. This is where you define your reward structure and compute them
+        according to the reward scales you tune in train_race.py. The following is an example reward structure that
+        causes the drone to hover near the zeroth gate. It will not produce a racing policy, but simply serves as proof
+        if your PPO implementation works. You should delete it or heavily modify it once you begin the racing task."""
 
+        # TODO ----- START ----- Define the tensors required for your custom reward structure
+        
         drone_pos_w = self.env._robot.data.root_link_pos_w
         drone_quat_w = self.env._robot.data.root_quat_w
         drone_ang_vel_b = self.env._robot.data.root_ang_vel_b
@@ -110,32 +117,38 @@ class DefaultQuadcopterStrategy:
         # Get position of the *current* target gate
         target_gate_pos_w = self.env._waypoints[self.env._idx_wp, :3]
 
-        # --- 1. Collision Penalty (Unchanged) ---
+        # compute crashed environments if contact detected for 100 timesteps
         contact_forces = self.env._contact_sensor.data.net_forces_w
-        crashed = (torch.norm(contact_forces, dim=-1) > 1.0).squeeze(1).float() # Use float for rewards
-        mask = (self.env.episode_length_buf > 100).float()
-        self.env._crashed = self.env._crashed + (crashed * mask)
+        crashed = (torch.norm(contact_forces, dim=-1) > 1e-8).squeeze(1).int()
+        mask = (self.env.episode_length_buf > 100).int()
+        self.env._crashed = self.env._crashed + crashed * mask
 
-        # --- 2. Gate-Pass Logic and Reward (Unchanged) ---
-        # This logic is self-contained and works well. The new script's
-        # `gate_passed` function relied on an external manager.
-        just_crossed_plane = (self.env._prev_x_drone_wrt_gate > 0.0) & (self.env._pose_drone_wrt_gate[:, 0] <= 0.0)
-        dist_from_gate_center_yz = torch.linalg.norm(self.env._pose_drone_wrt_gate[:, 1:], dim=1)
-        passed_through_gate = just_crossed_plane & (dist_from_gate_center_yz < self._gate_pass_threshold)
+        # --- Gate Passing Logic ---
+        x_drone_wrt_gate = self.env._pose_drone_wrt_gate[:, 0]
+        alignment_drone_wrt_gate = torch.linalg.norm(self.env._pose_drone_wrt_gate[:, 1:], dim=1)
+
+        gate_passed = (x_drone_wrt_gate > 0.0) & \
+                    (self.env._prev_x_drone_wrt_gate <= 0.0) & \
+                    (alignment_drone_wrt_gate < self.gate_radius)
         
-        ids_gate_passed = torch.where(passed_through_gate)[0]
-        reward_gate_pass = torch.zeros(self.num_envs, device=self.device)
+        ids_gate_passed = torch.where(gate_passed)[0]
+        num_gates = self.env._waypoints.shape[0]
+
+        gate_pass_reward = torch.zeros(self.num_envs, device=self.device)
+        lap_complete_reward = torch.zeros(self.num_envs, device=self.device)
+
         if len(ids_gate_passed) > 0:
-            reward_gate_pass[ids_gate_passed] = 1.0 # This 1.0 will be scaled by the config
-            # Update target waypoint to the next gate, looping around
-            self.env._idx_wp[ids_gate_passed] = (self.env._idx_wp[ids_gate_passed] + 1) % num_gates
+            gate_pass_reward[ids_gate_passed] = 1.0 # self.env.rew['gate_pass_reward_scale']
             self.env._n_gates_passed[ids_gate_passed] += 1
-            
-            # Update desired pos for logging/debug
+            self.env._idx_wp[ids_gate_passed] = (self.env._idx_wp[ids_gate_passed] + 1) % num_gates
             self.env._desired_pos_w[ids_gate_passed, :] = self.env._waypoints[self.env._idx_wp[ids_gate_passed], :3]
-        
-        # Store current X-pos for next step's check
-        self.env._prev_x_drone_wrt_gate = self.env._pose_drone_wrt_gate[:, 0]
+
+            is_lap_complete = (self.env._n_gates_passed[ids_gate_passed] > 0) & \
+                            (self.env._n_gates_passed[ids_gate_passed] % num_gates == 0)
+            lap_ids = ids_gate_passed[is_lap_complete]
+            if len(lap_ids) > 0:
+                lap_complete_reward[lap_ids] = 1.0 # self.env.rew['lap_completion_reward_scale']
+
 
         # --- 3. MOD: Progress Reward (from `progress` function) ---
         # Replaces the raceline-based progress.
@@ -185,7 +198,8 @@ class DefaultQuadcopterStrategy:
             # >> MOD: Updated reward dictionary
             rewards = {
                 "progress_to_gate": reward_progress_to_gate * self.env.rew["progress_to_gate_reward_scale"],
-                "pass_gate": reward_gate_pass * self.env.rew["pass_gate_reward_scale"],
+                "pass_gate": gate_pass_reward * self.env.rew["pass_gate_reward_scale"],
+                "lap_complete": lap_complete_reward * self.env.rew["lap_complete_reward_scale"],
                 "time": reward_time * self.env.rew["time_reward_scale"],
                 "crash": crashed * self.env.rew["crash_reward_scale"],
                 "action_rate": penalty_action_rate * self.env.rew["action_rate_reward_scale"],
@@ -266,7 +280,7 @@ class DefaultQuadcopterStrategy:
             # >> MOD: Update logging keys
             for key in self._episode_sums.keys():
                 if key in self.env.rew or key in [
-                    "progress_to_gate", "pass_gate", "time", "action_rate", 
+                    "progress_to_gate", "pass_gate", "lap_complete", "time", "action_rate", 
                     "ang_vel", "alignment"
                 ]:
                     episodic_sum_avg = torch.mean(self._episode_sums[key][env_ids])
