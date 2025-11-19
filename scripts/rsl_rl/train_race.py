@@ -130,28 +130,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # TODO ----- START ----- Define rewards scales
     # reward scales
     rewards = {
-        # --- Primary Objective (The Goal) ---
-        "pass_gate_reward_scale": 50.0,
-        "lap_complete_reward_scale": 100.0,
-
-        # --- Shaping Rewards (The "Hints") ---
-        # We want the agent to be rewarded for pointing in the right direction
-        # and for physically moving closer.
-        "alignment_reward_scale": 0.5,
-        "progress_to_gate_reward_scale": 0.5,
-
-        # --- Penalties (The "Rules") ---
-        # These should be small. They are just to encourage smooth flight.
-        "time_reward_scale": -0.01,
-        "action_rate_reward_scale": -0.05,
-        "ang_vel_reward_scale": -0.02,      # >> DECREASED from -0.01 (This is the main fix)
-        "crash_reward_scale": -10.0,         # (This is fine)
-
-        # --- Terminal Penalty (The "Failure") ---
-        # This should *exactly* offset your main reward.
-        # If a gate pass is +50, a death should be -50.
-        # This prevents the agent from learning to "crash for points."
-        "death_cost": -50.0,                  # >> CHANGED from -100.0 to match pass_gate
+        "progress_goal_reward_scale": 0.5, # was 50.0
+        "gates_passed_reward_scale": 30.0,
+        "crash_reward_scale": -1.0, # was 0.0
+        "time_reward_scale": -0.1,   # IMPORTANT (set later to -0.01)
+        "death_cost": -30.0 # was -10.0
     }
     # TODO ----- END -----
 
