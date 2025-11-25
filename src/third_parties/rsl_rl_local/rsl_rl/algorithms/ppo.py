@@ -85,12 +85,28 @@ class PPO:
     def act(self, obs, critic_obs):
         if self.actor_critic.is_recurrent:
             self.transition.hidden_states = self.actor_critic.get_hidden_states()
+        
+        # Safety: Check for NaN in observations
+        if torch.any(torch.isnan(obs)):
+            obs = torch.nan_to_num(obs, nan=0.0)
+        if torch.any(torch.isnan(critic_obs)):
+            critic_obs = torch.nan_to_num(critic_obs, nan=0.0)
+        
         # Compute the actions and values
         self.transition.actions = self.actor_critic.act(obs).detach()
         self.transition.values = self.actor_critic.evaluate(critic_obs).detach()
         self.transition.actions_log_prob = self.actor_critic.get_actions_log_prob(self.transition.actions).detach()
         self.transition.action_mean = self.actor_critic.action_mean.detach()
         self.transition.action_sigma = self.actor_critic.action_std.detach()
+        
+        # Safety: Check for NaN in action std
+        if torch.any(torch.isnan(self.transition.action_sigma)) or torch.any(self.transition.action_sigma < 0):
+            # Reset the policy network to avoid corrupted parameters
+            self.actor_critic.std.data.fill_(1.0)  # Reset std to 1.0
+            # Recompute with fixed std
+            self.transition.actions = self.actor_critic.act(obs).detach()
+            self.transition.action_sigma = self.actor_critic.action_std.detach()
+        
         # need to record obs and critic_obs before env.step()
         self.transition.observations = obs
         self.transition.critic_observations = critic_obs
@@ -191,12 +207,29 @@ class PPO:
 
             self.optimizer.zero_grad()
             loss.backward()
+            
+            # Check for NaN in gradients
+            has_nan_grad = False
+            for name, param in self.actor_critic.named_parameters():
+                if param.grad is not None and torch.any(torch.isnan(param.grad)):
+                    has_nan_grad = True
+                    param.grad = torch.nan_to_num(param.grad, nan=0.0)
+            
             nn.utils.clip_grad_norm_(self.actor_critic.parameters(),
                                      self.max_grad_norm)
             self.optimizer.step()
-            mean_value_loss += value_loss.item()
-            mean_surrogate_loss += surrogate_loss.item()
-            mean_entropy += entropy_batch.mean().item()
+            
+            # Check for NaN in parameters after update
+            for name, param in self.actor_critic.named_parameters():
+                if torch.any(torch.isnan(param.data)):
+                    # Don't accumulate losses if parameters are corrupted
+                    has_nan_grad = True
+                    break
+            
+            if not has_nan_grad:
+                mean_value_loss += value_loss.item()
+                mean_surrogate_loss += surrogate_loss.item()
+                mean_entropy += entropy_batch.mean().item()
             # TODO ----- END -----
 
         num_updates = self.num_learning_epochs * self.num_mini_batches

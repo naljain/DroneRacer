@@ -248,6 +248,9 @@ class QuadcopterEnv(DirectRLEnv):
             self.rew = cfg.rewards
         elif self.cfg.is_train:
             raise ValueError("rewards not provided")
+        else:
+            # Initialize empty dict for non-training mode (e.g., when playing)
+            self.rew = {}
 
         # Initialize tensors
         self._actions = torch.zeros(self.num_envs, self.cfg.action_space, device=self.device)
@@ -649,6 +652,7 @@ class QuadcopterEnv(DirectRLEnv):
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         drone_pose = self._robot.data.root_link_state_w[:, :3]
+        self._prev_x_drone_wrt_gate = self._pose_drone_wrt_gate[:, 0]
         self._pose_drone_wrt_gate, _ = subtract_frame_transforms(self._waypoints[self._idx_wp, :3],
                                                                  self._waypoints_quat[self._idx_wp, :],
                                                                  drone_pose)
